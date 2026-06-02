@@ -1,17 +1,21 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"sync"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 var (
 	jsonFilePath = "connections.json"
 	mu           sync.RWMutex
+	pgDB         *sql.DB
 )
 
 // Connection represents a saved S3 connection configuration.
@@ -25,8 +29,50 @@ type Connection struct {
 	CreatedAt          time.Time `json:"created_at"`
 }
 
-// InitDB initializes the local JSON database file.
+// isPostgres returns true if PostgreSQL backend is active.
+func isPostgres() bool {
+	return pgDB != nil
+}
+
+// InitDB initializes the database storage engine.
 func InitDB(dbPath string) error {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL != "" {
+		// PostgreSQL mode
+		db, err := sql.Open("postgres", dbURL)
+		if err != nil {
+			return err
+		}
+
+		// Verify connection
+		if err := db.Ping(); err != nil {
+			db.Close()
+			return err
+		}
+
+		pgDB = db
+
+		// Automatically run schema migrations to create table if it doesn't exist
+		query := `
+		CREATE TABLE IF NOT EXISTS connections (
+			id VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			access_key VARCHAR(255) NOT NULL,
+			secret_key_encrypted TEXT NOT NULL,
+			region VARCHAR(255) NOT NULL,
+			bucket VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE NOT NULL
+		);`
+		if _, err := pgDB.Exec(query); err != nil {
+			pgDB.Close()
+			pgDB = nil
+			return err
+		}
+
+		return nil
+	}
+
+	// Local JSON Fallback mode
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -73,18 +119,34 @@ func writeAllConnections(conns []Connection) error {
 	return os.WriteFile(jsonFilePath, data, 0644)
 }
 
-// SaveConnection inserts or updates a connection in the JSON database.
+// SaveConnection inserts or updates a connection in the database.
 func SaveConnection(conn *Connection) error {
+	if conn.CreatedAt.IsZero() {
+		conn.CreatedAt = time.Now()
+	}
+
+	if isPostgres() {
+		query := `
+		INSERT INTO connections (id, name, access_key, secret_key_encrypted, region, bucket, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			access_key = EXCLUDED.access_key,
+			secret_key_encrypted = EXCLUDED.secret_key_encrypted,
+			region = EXCLUDED.region,
+			bucket = EXCLUDED.bucket,
+			created_at = EXCLUDED.created_at;
+		`
+		_, err := pgDB.Exec(query, conn.ID, conn.Name, conn.AccessKey, conn.SecretKeyEncrypted, conn.Region, conn.Bucket, conn.CreatedAt)
+		return err
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	conns, err := readAllConnections()
 	if err != nil {
 		return err
-	}
-
-	if conn.CreatedAt.IsZero() {
-		conn.CreatedAt = time.Now()
 	}
 
 	// Check if connection already exists to update it, otherwise append
@@ -106,6 +168,20 @@ func SaveConnection(conn *Connection) error {
 
 // GetConnection retrieves a connection by its ID.
 func GetConnection(id string) (*Connection, error) {
+	if isPostgres() {
+		query := `SELECT id, name, access_key, secret_key_encrypted, region, bucket, created_at FROM connections WHERE id = $1`
+		row := pgDB.QueryRow(query, id)
+		var conn Connection
+		err := row.Scan(&conn.ID, &conn.Name, &conn.AccessKey, &conn.SecretKeyEncrypted, &conn.Region, &conn.Bucket, &conn.CreatedAt)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, errors.New("connection not found")
+			}
+			return nil, err
+		}
+		return &conn, nil
+	}
+
 	mu.RLock()
 	defer mu.RUnlock()
 
@@ -127,6 +203,30 @@ func GetConnection(id string) (*Connection, error) {
 
 // ListConnections retrieves all connections (excludes sensitive encrypted secret key in JSON responses).
 func ListConnections() ([]*Connection, error) {
+	if isPostgres() {
+		query := `SELECT id, name, access_key, secret_key_encrypted, region, bucket, created_at FROM connections ORDER BY created_at DESC`
+		rows, err := pgDB.Query(query)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		var result []*Connection
+		for rows.Next() {
+			var conn Connection
+			if err := rows.Scan(&conn.ID, &conn.Name, &conn.AccessKey, &conn.SecretKeyEncrypted, &conn.Region, &conn.Bucket, &conn.CreatedAt); err != nil {
+				return nil, err
+			}
+			// Strip out SecretKeyEncrypted for security before sending to list endpoint
+			conn.SecretKeyEncrypted = ""
+			result = append(result, &conn)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
 	mu.RLock()
 	defer mu.RUnlock()
 
@@ -148,6 +248,22 @@ func ListConnections() ([]*Connection, error) {
 
 // DeleteConnection deletes a connection from the database.
 func DeleteConnection(id string) error {
+	if isPostgres() {
+		query := `DELETE FROM connections WHERE id = $1`
+		res, err := pgDB.Exec(query, id)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return errors.New("connection not found")
+		}
+		return nil
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
