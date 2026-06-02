@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -69,6 +70,7 @@ func InitDB(dbPath string) error {
 			return err
 		}
 
+		log.Println("DB: Successfully connected and initialized PostgreSQL database")
 		return nil
 	}
 
@@ -91,8 +93,12 @@ func InitDB(dbPath string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(jsonFilePath, data, 0644)
+		err = os.WriteFile(jsonFilePath, data, 0644)
+		if err != nil {
+			return err
+		}
 	}
+	log.Printf("DB: Successfully initialized local JSON database at %s", jsonFilePath)
 	return nil
 }
 
@@ -138,6 +144,9 @@ func SaveConnection(conn *Connection) error {
 			created_at = EXCLUDED.created_at;
 		`
 		_, err := pgDB.Exec(query, conn.ID, conn.Name, conn.AccessKey, conn.SecretKeyEncrypted, conn.Region, conn.Bucket, conn.CreatedAt)
+		if err == nil {
+			log.Printf("DB: Successfully saved connection '%s' (%s) to PostgreSQL", conn.Name, conn.ID)
+		}
 		return err
 	}
 
@@ -163,7 +172,11 @@ func SaveConnection(conn *Connection) error {
 		conns = append(conns, *conn)
 	}
 
-	return writeAllConnections(conns)
+	err = writeAllConnections(conns)
+	if err == nil {
+		log.Printf("DB: Successfully saved connection '%s' (%s) to local JSON file", conn.Name, conn.ID)
+	}
+	return err
 }
 
 // GetConnection retrieves a connection by its ID.

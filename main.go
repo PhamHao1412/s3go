@@ -5,6 +5,7 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -89,7 +90,71 @@ func main() {
 	}
 
 	log.Printf("S3Go Server starting on http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	mainHandler := IPMiddleware(http.DefaultServeMux)
+	if err := http.ListenAndServe(":"+port, mainHandler); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
+}
+
+// getClientIP extracts the real client IP address, handling proxy headers from Render/Cloudflare.
+func getClientIP(r *http.Request) string {
+	// 1. Check X-Forwarded-For header (populated by Render's reverse proxy)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	// 2. Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+
+	// 3. Fallback to RemoteAddr
+	ip := r.RemoteAddr
+	if strings.Contains(ip, ":") {
+		host, _, err := net.SplitHostPort(ip)
+		if err == nil {
+			return host
+		}
+	}
+	return ip
+}
+
+// IPMiddleware blocks access to the application if the client IP is not whitelisted.
+func IPMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allowedIPsStr := os.Getenv("ALLOWED_IPS")
+		if allowedIPsStr == "" {
+			// Whitelist is not configured, bypass checks
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Parse comma-separated allowed IPs
+		allowedIPs := make(map[string]bool)
+		for _, ip := range strings.Split(allowedIPsStr, ",") {
+			trimmed := strings.TrimSpace(ip)
+			if trimmed != "" {
+				allowedIPs[trimmed] = true
+			}
+		}
+
+		clientIP := getClientIP(r)
+
+		// Always allow local loopback for easy local development/testing
+		if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if !allowedIPs[clientIP] {
+			log.Printf("SECURITY: Access blocked for unauthorized IP: %s (Request: %s %s)", clientIP, r.Method, r.URL.Path)
+			http.Error(w, "Forbidden: Access denied from your IP address.", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
