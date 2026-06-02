@@ -293,7 +293,7 @@ h1, h2, h3, h4, h5, h6 {
 .actions-group {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
 }
 
 /* Nav Bar: Breadcrumbs & Search */
@@ -681,6 +681,29 @@ input[type="checkbox"]:focus {
     background-color: rgba(255, 255, 255, 0.04);
     border-color: var(--border-color);
 }
+
+/* Button focus and active animations */
+.btn:focus, .btn-icon:focus, .btn-icon-sm:focus {
+    outline: none;
+}
+
+.btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 210, 255, 0.35);
+}
+
+.btn-primary:focus-visible {
+    box-shadow: 0 0 0 3px rgba(157, 78, 221, 0.4), 0 4px 12px rgba(0, 210, 255, 0.25);
+}
+
+.btn:active, .btn-icon:active, .btn-icon-sm:active {
+    transform: scale(0.97);
+}
+
+.btn-primary:hover:active {
+    transform: translateY(0) scale(0.97);
+}
+
 
 /* 6. Drag & Drop Overlay Styling */
 .dropzone-overlay {
