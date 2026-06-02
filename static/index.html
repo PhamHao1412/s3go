@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S3Go - Secure Local Amazon S3 Client</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-container">
+        <!-- 1. Sidebar Left: Connections list -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-cube logo-icon"></i>
+                    <span>S3Go</span>
+                </div>
+            </div>
+            
+            <div class="connections-section">
+                <div class="section-title">
+                    <span>CONNECTIONS</span>
+                    <button class="btn-icon" id="btn-add-conn" title="Add Connection">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                </div>
+                
+                <div class="connections-list" id="conn-list">
+                    <!-- Dynamic connections populated by JS -->
+                    <div class="connections-empty">No connections saved. Create a new connection to start!</div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <span class="version">MVP Version v1.0</span>
+                <span class="powered">Powered by Go & SQLite</span>
+            </div>
+        </aside>
+
+        <!-- 2. Main content area -->
+        <main class="main-content">
+            <!-- Top bar -->
+            <header class="top-bar">
+                <div class="workspace-info">
+                    <h2 id="active-connection-title">No Active Connection</h2>
+                    <div class="active-bucket-badge" id="active-bucket-badge" style="display: none;">
+                        <i class="fa-brands fa-aws"></i>
+                        <span id="active-bucket-name">bucket-name</span>
+                    </div>
+                </div>
+                <div class="actions-group">
+                    <button class="btn btn-primary" id="btn-upload" style="display: none;">
+                        <i class="fa-solid fa-cloud-arrow-up"></i> Upload File
+                    </button>
+                    <button class="btn btn-secondary" id="btn-create-folder" style="display: none;">
+                        <i class="fa-solid fa-folder-plus"></i> Create Folder
+                    </button>
+                </div>
+            </header>
+
+            <!-- Breadcrumb Navigation & Search -->
+            <div class="nav-bar" id="nav-bar" style="display: none;">
+                <div class="breadcrumb-container" id="breadcrumb">
+                    <span class="breadcrumb-item active"><i class="fa-solid fa-house"></i> Home</span>
+                </div>
+                
+                <div class="search-container">
+                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                    <input type="text" id="search-input" placeholder="Search files in connection...">
+                    <button class="btn-clear" id="btn-clear-search" style="display: none;"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+
+            <!-- Workspace Viewport -->
+            <div class="viewport" id="viewport">
+                <!-- Select a connection state -->
+                <div class="viewport-placeholder" id="placeholder-select-conn">
+                    <i class="fa-solid fa-hard-drive placeholder-icon animate-float"></i>
+                    <h3>Welcome to S3Go</h3>
+                    <p>Please create or select an S3 connection from the sidebar to browse S3 objects.</p>
+                </div>
+
+                <!-- Loading State -->
+                <div class="viewport-loading" id="viewport-loading" style="display: none;">
+                    <i class="fa-solid fa-circle-notch spinner animate-spin"></i>
+                    <p>Loading files and folders...</p>
+                </div>
+
+                <!-- Empty Bucket State -->
+                <div class="viewport-placeholder" id="placeholder-empty-bucket" style="display: none;">
+                    <i class="fa-regular fa-folder-open placeholder-icon"></i>
+                    <h3>Empty folder</h3>
+                    <p>Drag and drop files here or click "Upload File" to upload data.</p>
+                </div>
+
+                <!-- S3 Files & Folders Grid -->
+                <div class="files-container" id="files-container" style="display: none;">
+                    <div class="files-header">
+                        <div class="col-checkbox">
+                            <input type="checkbox" id="select-all-checkbox">
+                        </div>
+                        <div class="col-name">Name</div>
+                        <div class="col-size">Size</div>
+                        <div class="col-date">Last Modified</div>
+                        <div class="col-actions"></div>
+                    </div>
+                    <div class="files-list" id="files-list">
+                        <!-- Dynamic files populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Multi-select Bulk Actions Floating Bar -->
+            <div class="bulk-actions-bar" id="bulk-actions-bar" style="display: none;">
+                <span class="selected-count" id="selected-count">0 files selected</span>
+                <div class="bulk-buttons">
+                    <button class="btn btn-danger btn-sm" id="btn-bulk-delete">
+                        <i class="fa-solid fa-trash"></i> Delete Selected
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-clear-selection">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 3. Drag and Drop Overlay -->
+    <div class="dropzone-overlay" id="dropzone-overlay">
+        <div class="dropzone-box">
+            <i class="fa-solid fa-cloud-arrow-up dropzone-icon animate-bounce"></i>
+            <h2>Drag and drop files to upload</h2>
+            <p>Files will be uploaded to your current folder</p>
+        </div>
+    </div>
+
+    <!-- 4. Modals Section -->
+    <!-- Add Connection Modal -->
+    <div class="modal" id="modal-connection">
+        <div class="modal-content glassmorphism">
+            <div class="modal-header">
+                <h3 id="modal-conn-title">Add New S3 Connection</h3>
+                <button class="modal-close" onclick="closeModal('modal-connection')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-connection" data-mode="create">
+                <div class="form-group">
+                    <label for="conn-name">Connection Name</label>
+                    <input type="text" id="conn-name" placeholder="e.g. My Production S3, Marketing Assets" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group col-6">
+                        <label for="conn-access-key">Access Key ID</label>
+                        <input type="text" id="conn-access-key" placeholder="AKIA..." required>
+                    </div>
+                    <div class="form-group col-6">
+                        <label for="conn-secret-key">Secret Access Key</label>
+                        <input type="password" id="conn-secret-key" placeholder="Enter Secret Key" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group col-6">
+                        <label for="conn-region">Region</label>
+                        <input type="text" id="conn-region" placeholder="e.g. ap-southeast-1, us-east-1" required>
+                    </div>
+                    <div class="form-group col-6">
+                        <label for="conn-bucket">S3 Bucket Name (Optional)</label>
+                        <input type="text" id="conn-bucket" placeholder="Leave blank to browse all buckets">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <span class="connection-verify-status" id="conn-verify-status"></span>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-connection')">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="btn-save-conn-submit">
+                        <span id="save-btn-text">Test & Save</span>
+                        <i class="fa-solid fa-circle-notch spinner btn-spinner" id="save-btn-spinner" style="display:none;"></i>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Folder Modal -->
+    <div class="modal" id="modal-folder">
+        <div class="modal-content glassmorphism">
+            <div class="modal-header">
+                <h3>Create New Folder</h3>
+                <button class="modal-close" onclick="closeModal('modal-folder')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-folder">
+                <div class="form-group">
+                    <label for="folder-name">Folder Name</label>
+                    <input type="text" id="folder-name" placeholder="Enter folder name (no special characters)" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-folder')">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Presigned URL Generator Modal -->
+    <div class="modal" id="modal-presigned">
+        <div class="modal-content glassmorphism">
+            <div class="modal-header">
+                <h3>Create Shareable Link (Presigned URL)</h3>
+                <button class="modal-close" onclick="closeModal('modal-presigned')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="form-group">
+                <label>File Path</label>
+                <input type="text" id="presigned-file-key" readonly>
+            </div>
+            <div class="form-group">
+                <label for="presigned-expires">Expiration Time</label>
+                <select id="presigned-expires">
+                    <option value="15">15 minutes</option>
+                    <option value="60" selected>1 hour</option>
+                    <option value="1440">24 hours (1 day)</option>
+                    <option value="10080">7 days</option>
+                </select>
+            </div>
+            <div class="presigned-result-box" id="presigned-result-box" style="display:none;">
+                <label>Presigned URL (Click to copy)</label>
+                <div class="copy-url-container">
+                    <input type="text" id="presigned-url-output" readonly>
+                    <button class="btn btn-primary" id="btn-copy-url"><i class="fa-regular fa-copy"></i> Copy</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('modal-presigned')">Close</button>
+                <button type="button" class="btn btn-primary" id="btn-generate-presigned-submit">Generate Link</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Preview Modal -->
+    <div class="modal" id="modal-preview">
+        <div class="modal-content glassmorphism preview-modal-content">
+            <div class="modal-header">
+                <h3 id="preview-file-name">File Preview</h3>
+                <div class="preview-header-actions">
+                    <button class="btn-icon" id="btn-download-preview" title="Download File"><i class="fa-solid fa-download"></i></button>
+                    <button class="modal-close" onclick="closeModal('modal-preview')"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+            <div class="preview-body" id="preview-body">
+                <!-- Preview content populated by JS dynamically -->
+                <div class="viewport-loading">
+                    <i class="fa-solid fa-circle-notch spinner animate-spin"></i>
+                    <p>Loading file data...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Delete Modal -->
+    <div class="modal" id="modal-confirm-delete">
+        <div class="modal-content glassmorphism confirm-modal">
+            <div class="modal-header">
+                <h3>Confirm Delete</h3>
+                <button class="modal-close" onclick="closeModal('modal-confirm-delete')"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="delete-confirm-text">Are you sure you want to delete this file? This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeModal('modal-confirm-delete')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="btn-confirm-delete-submit">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Uploads Progress Pane -->
+    <div class="upload-progress-pane" id="upload-progress-pane" style="display: none;">
+        <div class="upload-progress-header">
+            <h4>Uploading (<span id="upload-active-count">0</span> files)</h4>
+            <button class="btn-icon-sm" id="btn-close-upload-pane"><i class="fa-solid fa-chevron-down"></i></button>
+        </div>
+        <div class="upload-items-list" id="upload-items-list">
+            <!-- Dynamic upload items progress bars -->
+        </div>
+    </div>
+
+    <!-- 5. Toast alerts container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Custom Logic -->
+    <script src="app.js"></script>
+</body>
+</html>

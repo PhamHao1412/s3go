@@ -1,0 +1,22 @@
+# S3Go Local Configuration
+connections.json
+s3go.db
+.env
+
+# Go Build Binaries
+s3go
+s3go.exe
+
+# Local Development Directories
+tmp/
+local_gocache/
+local_gopath/
+
+# IDE Configuration Files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
