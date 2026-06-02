@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	s3Infra "s3go/internal/infra/s3"
@@ -16,6 +17,7 @@ type Service interface {
 	GetFilePreview(ctx context.Context, id string, key string) (string, error)
 	GeneratePresignedURL(ctx context.Context, id string, input model.PresignedURLInput) (model.PresignedURLResponse, error)
 	DeleteFiles(ctx context.Context, id string, input model.DeleteFilesInput) error
+	UploadFile(ctx context.Context, id string, key string, body io.Reader, size int64, contentType string) error
 }
 
 type service struct {

@@ -102,3 +102,27 @@ func (c *Controller) GetFilePreview(w http.ResponseWriter, r *http.Request) {
 
 	dto.SendJSON(w, http.StatusOK, model.FilePreviewResponse{Content: content})
 }
+
+func (c *Controller) UploadFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		dto.SendError(w, http.StatusBadRequest, "Connection ID is required")
+		return
+	}
+
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		dto.SendError(w, http.StatusBadRequest, "key query parameter is required")
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+
+	err := c.s3Svc.UploadFile(r.Context(), id, key, r.Body, r.ContentLength, contentType)
+	if err != nil {
+		dto.SendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	dto.SendJSON(w, http.StatusOK, model.StatusResponse{Status: "success"})
+}

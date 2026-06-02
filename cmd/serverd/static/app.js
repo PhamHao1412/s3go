@@ -693,29 +693,13 @@ async function uploadSingleFile(file, fileKey, itemId, countLabel) {
     const percentLabel = document.getElementById(`${itemId}-percent`);
 
     try {
-        // 1. Ask Backend to generate S3 Presigned PUT URL for upload
-        const presignRes = await fetch(`/api/connections/${activeConnection}/presigned-url`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                key: fileKey,
-                action: "upload",
-                expires: 30 // Expiry 30 minutes
-            })
-        });
-
-        const presignData = await presignRes.json();
-        if (!presignRes.ok) {
-            throw new Error(presignData.error || "Failed to generate presigned upload URL");
-        }
-
-        // 2. Perform direct browser-to-S3 upload via XMLHttpRequest to monitor real progress bytes
         const xhr = new XMLHttpRequest();
         activeUploads[itemId] = xhr;
 
-        xhr.open("PUT", presignData.url, true);
+        // Upload through backend proxy endpoint
+        const uploadUrl = `/api/connections/${activeConnection}/upload?key=${encodeURIComponent(fileKey)}`;
+        xhr.open("POST", uploadUrl, true);
         
-        // Crucial: Set Content-Type correctly to empty string or S3 matches signature
         xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
 
         // Monitor real-time upload progress percentage
@@ -737,9 +721,16 @@ async function uploadSingleFile(file, fileKey, itemId, countLabel) {
                 // Refresh folder list automatically
                 fetchFiles("");
             } else {
+                let errorMsg = `Upload failed for ${file.name} (Status: ${xhr.status})`;
+                try {
+                    const responseJson = JSON.parse(xhr.responseText);
+                    if (responseJson && responseJson.error) {
+                        errorMsg = responseJson.error;
+                    }
+                } catch (_) {}
                 fill.className = "progress-bar-fill error";
-                percentLabel.innerText = "S3 Error";
-                showToast("error", `Upload failed for ${file.name} (S3 Status: ${xhr.status})`);
+                percentLabel.innerText = "Error";
+                showToast("error", errorMsg);
             }
             finalizeUploadItem(itemId, countLabel);
         };
@@ -751,7 +742,7 @@ async function uploadSingleFile(file, fileKey, itemId, countLabel) {
             finalizeUploadItem(itemId, countLabel);
         };
 
-        // Send binary data directly
+        // Send binary data directly to backend
         xhr.send(file);
 
     } catch (err) {
@@ -823,28 +814,17 @@ async function handleCreateFolder(e) {
     const folderKey = currentPrefix + folderName + "/";
 
     try {
-        // To create a folder placeholder in S3, we generate a presigned PUT URL and upload a 0-byte dummy payload!
-        const presignRes = await fetch(`/api/connections/${activeConnection}/presigned-url`, {
+        // To create a folder placeholder in S3, we upload a 0-byte dummy payload directly to the backend
+        const res = await fetch(`/api/connections/${activeConnection}/upload?key=${encodeURIComponent(folderKey)}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                key: folderKey,
-                action: "upload",
-                expires: 15
-            })
-        });
-
-        const presignData = await presignRes.json();
-        if (!presignRes.ok) throw new Error(presignData.error || "Failed to generate presigned URL");
-
-        // Perform S3 upload with empty body
-        const s3Res = await fetch(presignData.url, {
-            method: "PUT",
             headers: { "Content-Type": "application/octet-stream" },
             body: new Blob([])
         });
 
-        if (!s3Res.ok) throw new Error(`S3 error: ${s3Res.status}`);
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || `Server error: ${res.status}`);
+        }
 
         showToast("success", `Folder "${folderName}" created successfully!`);
         closeModal("modal-folder");

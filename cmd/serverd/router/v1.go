@@ -14,4 +14,5 @@ func (rtr *Router) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/connections/{id}/presigned-url", rtr.ctrlV1.GeneratePresignedURL)
 	mux.HandleFunc("DELETE /api/connections/{id}/files", rtr.ctrlV1.DeleteFiles)
 	mux.HandleFunc("GET /api/connections/{id}/preview", rtr.ctrlV1.GetFilePreview)
+	mux.HandleFunc("POST /api/connections/{id}/upload", rtr.ctrlV1.UploadFile)
 }

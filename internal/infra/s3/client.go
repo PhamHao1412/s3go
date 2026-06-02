@@ -398,3 +398,31 @@ func (c *client) GetFilePreview(ctx context.Context, accessKey, secretKey, regio
 
 	return string(content), nil
 }
+
+// UploadObject uploads raw binary data to S3.
+func (c *client) UploadObject(ctx context.Context, accessKey, secretKey, region, bucket, key string, body io.Reader, size int64, contentType string) error {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return err
+	}
+
+	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	input := &awsS3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   body,
+	}
+
+	if size > 0 {
+		input.ContentLength = aws.Int64(size)
+	}
+
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+
+	_, err = s3Client.PutObject(uploadCtx, input)
+	return err
+}
