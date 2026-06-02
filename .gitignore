@@ -11,6 +11,7 @@ s3go.exe
 tmp/
 local_gocache/
 local_gopath/
+.gocache/
 
 # IDE Configuration Files
 .idea/

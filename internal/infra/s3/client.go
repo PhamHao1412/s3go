@@ -8,25 +8,24 @@ import (
 	"strings"
 	"time"
 
+	"s3go/internal/model"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	awsS3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// S3Item represents a file or directory in S3.
-type S3Item struct {
-	Key          string    `json:"key"`
-	Name         string    `json:"name"`
-	Size         int64     `json:"size"`
-	LastModified time.Time `json:"last_modified"`
-	IsDir        bool      `json:"is_dir"`
+type client struct{}
+
+func NewClient() Client {
+	return &client{}
 }
 
-// NewS3Client creates a new AWS S3 Client using static credentials.
-func NewS3Client(accessKey, secretKey, region string) (*s3.Client, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+// newS3Client creates a new AWS S3 Client using static credentials.
+func (c *client) newS3Client(ctx context.Context, accessKey, secretKey, region string) (*awsS3.Client, error) {
+	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
 		config.WithCredentialsProvider(aws.NewCredentialsCache(
 			credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
@@ -35,27 +34,27 @@ func NewS3Client(accessKey, secretKey, region string) (*s3.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s3.NewFromConfig(cfg), nil
+	return awsS3.NewFromConfig(cfg), nil
 }
 
 // VerifyCredentials checks if the provided credentials are valid.
-func VerifyCredentials(accessKey, secretKey, region, bucket string) error {
-	client, err := NewS3Client(accessKey, secretKey, region)
+func (c *client) VerifyCredentials(ctx context.Context, accessKey, secretKey, region, bucket string) error {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	verifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	// If bucket is empty, verify credentials by listing all buckets in the account
 	if bucket == "" {
-		_, err = client.ListBuckets(ctx, &s3.ListBucketsInput{})
+		_, err = s3Client.ListBuckets(verifyCtx, &awsS3.ListBucketsInput{})
 		return err
 	}
 
 	// 1. Try HeadBucket first
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+	_, err = s3Client.HeadBucket(verifyCtx, &awsS3.HeadBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	if err == nil {
@@ -71,7 +70,7 @@ func VerifyCredentials(accessKey, secretKey, region, bucket string) error {
 	}
 
 	// 3. Fallback: Try a minimal ListObjectsV2 to see if list permissions work
-	_, listErr := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	_, listErr := s3Client.ListObjectsV2(verifyCtx, &awsS3.ListObjectsV2Input{
 		Bucket:  aws.String(bucket),
 		MaxKeys: aws.Int32(1),
 	})
@@ -86,26 +85,29 @@ func VerifyCredentials(accessKey, secretKey, region, bucket string) error {
 		return fmt.Errorf("invalid AWS credentials (Access Key ID or Secret Key is incorrect)")
 	}
 
-	// 4. If both failed with Forbidden/AccessDenied (403), the keys are actually VALID (otherwise AWS S3
-	// would have thrown an Auth error), but the user's IAM policy restricts bucket-level actions.
-	// We will still allow saving the connection, because the user may have direct object-level access
-	// (like s3:PutObject or s3:GetObject on bucket/*) which works perfectly for presigned uploads/downloads.
+	// 4. If both failed with Forbidden/AccessDenied (403), the keys are actually VALID,
+	// but the user's IAM policy restricts bucket-level actions.
 	return nil
 }
 
 // ListBuckets retrieves all buckets available under the credentials.
-func ListBuckets(client *s3.Client) ([]S3Item, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	output, err := client.ListBuckets(ctx, &s3.ListBucketsInput{})
+func (c *client) ListBuckets(ctx context.Context, accessKey, secretKey, region string) ([]model.S3Item, error) {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
 	if err != nil {
 		return nil, err
 	}
 
-	var items []S3Item
+	listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	output, err := s3Client.ListBuckets(listCtx, &awsS3.ListBucketsInput{})
+	if err != nil {
+		return nil, err
+	}
+
+	var items []model.S3Item
 	for _, b := range output.Buckets {
-		items = append(items, S3Item{
+		items = append(items, model.S3Item{
 			Key:          aws.ToString(b.Name) + "/",
 			Name:         aws.ToString(b.Name),
 			IsDir:        true,
@@ -117,7 +119,7 @@ func ListBuckets(client *s3.Client) ([]S3Item, error) {
 
 // isGarbage checks if a folder or file name looks like trash/logs (contains special characters or is a UUID)
 func isGarbage(name string) bool {
-	// 1. Check for special characters used in their system's garbage/log folders
+	// 1. Check for special characters
 	if strings.Contains(name, "*") || strings.Contains(name, "#") {
 		return true
 	}
@@ -131,7 +133,12 @@ func isGarbage(name string) bool {
 }
 
 // ListObjects retrieves objects inside a bucket under a prefix, supporting searching and structured directories.
-func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, error) {
+func (c *client) ListObjects(ctx context.Context, accessKey, secretKey, region, bucket, prefix, search string) ([]model.S3Item, error) {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return nil, err
+	}
+
 	bypassBucket := os.Getenv("BYPASS_BUCKET")
 	bypassFolder := os.Getenv("BYPASS_FOLDER")
 
@@ -141,10 +148,8 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 			bypassFolderSlash += "/"
 		}
 
-		// SPECIAL CASE: If we are at the root level of the massive configured bucket,
-		// only return the bypass folder to completely bypass the million garbage folders and prevent timeouts!
 		if bucket == bypassBucket && prefix == "" && search == "" {
-			return []S3Item{
+			return []model.S3Item{
 				{
 					Key:   bypassFolderSlash,
 					Name:  strings.TrimSuffix(bypassFolder, "/"),
@@ -155,13 +160,12 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 	}
 
 	// Increase timeout to 180 seconds (3 minutes) as requested
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	listCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 
-	var items []S3Item
+	var items []model.S3Item
 	maxItems := 2000 // Return at most 2000 valid items to prevent browser lag & infinite backend loops
 
-	// If there is a search query, list recursively and filter locally
 	if search != "" {
 		searchPrefix := prefix
 		if bypassBucket != "" && bypassFolder != "" && bucket == bypassBucket && prefix == "" {
@@ -172,7 +176,7 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 			searchPrefix = bypassFolderSlash // Focus search inside bypass folder to avoid massive timeout
 		}
 
-		paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		paginator := awsS3.NewListObjectsV2Paginator(s3Client, &awsS3.ListObjectsV2Input{
 			Bucket: aws.String(bucket),
 			Prefix: aws.String(searchPrefix),
 		})
@@ -182,7 +186,7 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 		maxScan := 15000 // Scan up to 15,000 S3 objects
 
 		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(ctx)
+			page, err := paginator.NextPage(listCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -192,7 +196,6 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 			for _, obj := range page.Contents {
 				key := aws.ToString(obj.Key)
 
-				// Extract file or directory name
 				parts := strings.Split(key, "/")
 				var name string
 				if len(parts) > 0 {
@@ -202,13 +205,12 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 					}
 				}
 
-				// Skip garbage items
 				if isGarbage(name) {
 					continue
 				}
 
 				if strings.Contains(strings.ToLower(key), searchLower) {
-					items = append(items, S3Item{
+					items = append(items, model.S3Item{
 						Key:          key,
 						Name:         name,
 						Size:         aws.ToInt64(obj.Size),
@@ -230,14 +232,14 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 	}
 
 	// Normal list (structured browsing with delimiter)
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+	paginator := awsS3.NewListObjectsV2Paginator(s3Client, &awsS3.ListObjectsV2Input{
 		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(prefix),
 		Delimiter: aws.String("/"),
 	})
 
 	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+		page, err := paginator.NextPage(listCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -246,17 +248,15 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 		for _, commonPrefix := range page.CommonPrefixes {
 			dirKey := aws.ToString(commonPrefix.Prefix)
 
-			// Get directory display name (e.g. "images/" -> "images")
 			trimmed := strings.TrimSuffix(dirKey, "/")
 			parts := strings.Split(trimmed, "/")
 			name := parts[len(parts)-1]
 
-			// Skip garbage folders!
 			if isGarbage(name) {
 				continue
 			}
 
-			items = append(items, S3Item{
+			items = append(items, model.S3Item{
 				Key:   dirKey,
 				Name:  name,
 				IsDir: true,
@@ -272,7 +272,6 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 			for _, obj := range page.Contents {
 				key := aws.ToString(obj.Key)
 
-				// Skip the directory placeholder object itself
 				if key == prefix {
 					continue
 				}
@@ -280,12 +279,11 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 				parts := strings.Split(key, "/")
 				name := parts[len(parts)-1]
 
-				// Skip garbage files!
 				if isGarbage(name) {
 					continue
 				}
 
-				items = append(items, S3Item{
+				items = append(items, model.S3Item{
 					Key:          key,
 					Name:         name,
 					Size:         aws.ToInt64(obj.Size),
@@ -300,7 +298,7 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 		}
 
 		if len(items) >= maxItems {
-			break // Stop loading pages once we have 2000 clean items
+			break
 		}
 	}
 
@@ -308,13 +306,17 @@ func ListObjects(client *s3.Client, bucket, prefix, search string) ([]S3Item, er
 }
 
 // GeneratePresignedGET creates a temporary link to download/view an object.
-func GeneratePresignedGET(client *s3.Client, bucket, key string, expiration time.Duration) (string, error) {
-	presigner := s3.NewPresignClient(client)
+func (c *client) GeneratePresignedGET(ctx context.Context, accessKey, secretKey, region, bucket, key string, expiration time.Duration) (string, error) {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return "", err
+	}
 
-	req, err := presigner.PresignGetObject(context.TODO(), &s3.GetObjectInput{
+	presigner := awsS3.NewPresignClient(s3Client)
+	req, err := presigner.PresignGetObject(ctx, &awsS3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	}, s3.WithPresignExpires(expiration))
+	}, awsS3.WithPresignExpires(expiration))
 	if err != nil {
 		return "", err
 	}
@@ -323,13 +325,17 @@ func GeneratePresignedGET(client *s3.Client, bucket, key string, expiration time
 }
 
 // GeneratePresignedPUT creates a temporary link to upload an object directly from the browser.
-func GeneratePresignedPUT(client *s3.Client, bucket, key string, expiration time.Duration) (string, error) {
-	presigner := s3.NewPresignClient(client)
+func (c *client) GeneratePresignedPUT(ctx context.Context, accessKey, secretKey, region, bucket, key string, expiration time.Duration) (string, error) {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return "", err
+	}
 
-	req, err := presigner.PresignPutObject(context.TODO(), &s3.PutObjectInput{
+	presigner := awsS3.NewPresignClient(s3Client)
+	req, err := presigner.PresignPutObject(ctx, &awsS3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	}, s3.WithPresignExpires(expiration))
+	}, awsS3.WithPresignExpires(expiration))
 	if err != nil {
 		return "", err
 	}
@@ -338,9 +344,14 @@ func GeneratePresignedPUT(client *s3.Client, bucket, key string, expiration time
 }
 
 // DeleteObjects deletes multiple files at once from the bucket.
-func DeleteObjects(client *s3.Client, bucket string, keys []string) error {
+func (c *client) DeleteObjects(ctx context.Context, accessKey, secretKey, region, bucket string, keys []string) error {
 	if len(keys) == 0 {
 		return nil
+	}
+
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return err
 	}
 
 	var objects []types.ObjectIdentifier
@@ -350,7 +361,7 @@ func DeleteObjects(client *s3.Client, bucket string, keys []string) error {
 		})
 	}
 
-	_, err := client.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
+	_, err = s3Client.DeleteObjects(ctx, &awsS3.DeleteObjectsInput{
 		Bucket: aws.String(bucket),
 		Delete: &types.Delete{
 			Objects: objects,
@@ -361,11 +372,16 @@ func DeleteObjects(client *s3.Client, bucket string, keys []string) error {
 }
 
 // GetFilePreview downloads the first 2MB of a text file from S3 to preview it.
-func GetFilePreview(client *s3.Client, bucket, key string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (c *client) GetFilePreview(ctx context.Context, accessKey, secretKey, region, bucket, key string) (string, error) {
+	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
+	if err != nil {
+		return "", err
+	}
+
+	previewCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	output, err := client.GetObject(ctx, &s3.GetObjectInput{
+	output, err := s3Client.GetObject(previewCtx, &awsS3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -374,7 +390,6 @@ func GetFilePreview(client *s3.Client, bucket, key string) (string, error) {
 	}
 	defer output.Body.Close()
 
-	// Read up to 2MB (Safety limit to prevent RAM bloat on large files)
 	limitReader := io.LimitReader(output.Body, 2*1024*1024)
 	content, err := io.ReadAll(limitReader)
 	if err != nil {

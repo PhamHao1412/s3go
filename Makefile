@@ -6,7 +6,7 @@ all: build
 # Build target: Compiles the Go application
 build:
 	@echo "==> Building S3Go binary..."
-	go build -o s3go main.go
+	go build -o s3go cmd/serverd/main.go
 	@echo "==> Build successful! Binary created: ./s3go"
 
 # Run target: Builds and then runs the application
@@ -17,7 +17,7 @@ run: build
 # Test target: Runs unit tests
 test:
 	@echo "==> Running unit tests..."
-	go test -v ./internal/crypto/...
+	go test -v ./internal/pkg/crypto/...
 
 # Clean target: Cleans build artifacts and temp files
 clean:
