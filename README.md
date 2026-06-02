@@ -8,7 +8,7 @@ S3Go is a secure, local, high-performance Amazon S3 web client built in Go and w
 
 - **🎨 Sleek Glassmorphic Interface:** A modern, visual-first dark mode dashboard utilizing subtle backdrop blur filters (`backdrop-filter`), harmonious HSL colors, premium typography (Outfit and Inter from Google Fonts), and fluid micro-animations.
 - **⚡ Massive Bucket Listing Optimization (Root Bypass):** 
-  - Effortlessly browse S3 buckets containing millions of garbage logs or high-density directories (e.g., corporate logging buckets like `amz-ms-resource`).
+  - Effortlessly browse large S3 buckets containing millions of objects or deep directory structures.
   - By bypassing the root folder listing and targeting a nested directory directly, S3Go loads the dashboard instantly (**0.0-second listing time**), avoiding AWS timeout issues (`context deadline exceeded`).
   - Configurable dynamically via environment variables (`BYPASS_BUCKET` and `BYPASS_FOLDER`).
 - **📤 Multi-Threaded Direct Uploads with Progress Bars:**
@@ -19,9 +19,10 @@ S3Go is a secure, local, high-performance Amazon S3 web client built in Go and w
   - **AES-256-GCM Encryption:** Secret access keys are securely encrypted at rest in the database.
   - **Edit Isolation:** AWS Secret Access Keys are never returned to the frontend. During edits, the secret field remains blank. Leaving it blank retains the existing secure key, making credential updates easy and safe.
   - **Pre-flight Validation:** Automatically executes a pre-flight S3 verification check using the decrypted credentials before saving the connection.
-- **🗃️ CGO-Free Local Database:**
-  - Uses a lightweight, thread-safe JSON file database (`connections.json`) wrapped in double-checked read/write mutexes (`sync.RWMutex`).
-  - Prioritizes the `DB_PATH` environment variable, enabling effortless state preservation on Render Persistent Disks or similar persistent cloud environments.
+- **🗃️ Dual Storage Backend (JSON & PostgreSQL):**
+  - **CGO-Free Local JSON Fallback:** Uses a lightweight, thread-safe JSON file database (`connections.json`) wrapped in double-checked read/write mutexes (`sync.RWMutex`) for zero-configuration local development.
+  - **Production-Ready PostgreSQL Engine:** Automatically switches to a persistent SQL database when a `DATABASE_URL` environment variable is detected. Automatically runs migrations on start to create the database schema without manual effort. Perfect for deploying S3Go to Render's Free Web Service + Free Postgres tiers!
+- **🌐 100% English Localized:** Fully internationalized interface, forms, modals, table columns, dynamic notifications, and error alerts.
 - **⌨️ Keyboard Shortcuts & History Navigation:**
   - **Escape Key Closing:** Close any active modal (Connection Manager, Folder Creation, File Preview, or Delete confirmation) instantly by pressing the `Esc` key.
   - **Browser Back/Forward Support:** Uses the HTML5 History API to synchronize current connection and prefix folders as query parameters (`?connection=ID&prefix=PATH`). You can navigate folder levels natively using browser back/forward buttons, and page reloads (`F5`) automatically restore your exact browsing state.
@@ -32,27 +33,36 @@ S3Go is a secure, local, high-performance Amazon S3 web client built in Go and w
 
 ```
 s3go/
+├── cmd/
+│   └── serverd/
+│       ├── main.go           # Bootstrapper, database initializer, and HTTP server daemon
+│       ├── router/           # Routing configuration mapping HTTP paths to controllers
+│       └── static/           # Embedded Frontend SPA Assets (index.html, style.css, app.js)
 ├── internal/
-│   ├── api/
-│   │   └── handlers.go       # REST API endpoints for S3 listing, credentials, and presigning
-│   ├── crypto/
-│   │   ├── crypto.go         # AES-256-GCM symmetric encryption & runtime security checks
-│   │   └── crypto_test.go    # Hermetic unit tests with dynamic mock key environment isolation
-│   ├── db/
-│   │   └── db.go             # Thread-safe JSON database implementation
-│   └── s3/
-│       └── client.go         # Direct AWS SDK v2 client integration & credentials validator
-├── static/                   # Embedded Frontend SPA Assets
-│   ├── index.html            # SPA Structural DOM Markup
-│   ├── style.css             # Glassmorphism tokens, micro-animations & layout stylesheets
-│   └── app.js                # Interactive controllers, history router & direct upload handlers
+│   ├── app/
+│   │   └── configs.go        # Configuration loader, environment validation & .env parser
+│   ├── entity/
+│   │   └── connection.go     # Core database entity definition
+│   ├── model/
+│   │   ├── connection.go     # Connection API contracts and schemas
+│   │   ├── s3.go             # S3 file model structures & presigned payloads
+│   │   └── types.go          # General model types
+│   ├── persistence/
+│   │   ├── spec.go           # Unit of Work standard interfaces & implementation
+│   │   └── connection/       # Connection repository specs & local/PG integrations
+│   ├── infra/
+│   │   └── s3/               # AWS SDK client wrapper client & credentials validation
+│   ├── service/
+│   │   ├── connection/       # Connection manager business service
+│   │   └── s3/               # S3 file action business service
+│   ├── controller/
+│   │   └── rest/v1/          # REST API controller handlers and response DTO mapping
+│   └── pkg/
+│       └── crypto/           # AES-256-GCM symmetric encryption & hermetic unit tests
 ├── .env.example              # Template configuration for environment settings
 ├── Makefile                  # Build, test, run, and cleanup commands
-├── main.go                   # Bootstrapper, env loader, and embed route server
 └── go.mod                    # CGO-free dependencies list
 ```
-
----
 
 ## 🚀 Getting Started
 
