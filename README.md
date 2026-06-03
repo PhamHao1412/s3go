@@ -21,8 +21,6 @@ S3Go is a secure, local, high-performance Amazon S3 web client built in Go and w
   - **Pre-flight Validation:** Automatically executes a pre-flight S3 verification check using the decrypted credentials before saving the connection.
 - **🗃️ Dual Storage Backend (JSON & PostgreSQL):**
   - **CGO-Free Local JSON Fallback:** Uses a lightweight, thread-safe JSON file database (`connections.json`) wrapped in double-checked read/write mutexes (`sync.RWMutex`) for zero-configuration local development.
-  - **Production-Ready PostgreSQL Engine:** Automatically switches to a persistent SQL database when a `DATABASE_URL` environment variable is detected. Automatically runs migrations on start to create the database schema without manual effort. Perfect for deploying S3Go to Render's Free Web Service + Free Postgres tiers!
-- **🌐 100% English Localized:** Fully internationalized interface, forms, modals, table columns, dynamic notifications, and error alerts.
 - **⌨️ Keyboard Shortcuts & History Navigation:**
   - **Escape Key Closing:** Close any active modal (Connection Manager, Folder Creation, File Preview, or Delete confirmation) instantly by pressing the `Esc` key.
   - **Browser Back/Forward Support:** Uses the HTML5 History API to synchronize current connection and prefix folders as query parameters (`?connection=ID&prefix=PATH`). You can navigate folder levels natively using browser back/forward buttons, and page reloads (`F5`) automatically restore your exact browsing state.
