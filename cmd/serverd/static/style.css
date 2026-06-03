@@ -293,7 +293,7 @@ h1, h2, h3, h4, h5, h6 {
 .actions-group {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 20px;
 }
 
 /* Nav Bar: Breadcrumbs & Search */
@@ -1131,7 +1131,7 @@ input[type="checkbox"]:focus {
 
 .bulk-buttons {
     display: flex;
-    gap: 10px;
+    gap: 16px;
 }
 
 /* 10. Toasts alerts style */
