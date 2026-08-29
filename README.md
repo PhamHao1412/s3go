@@ -1,98 +1,156 @@
-# S3Go 🚀
+<div align="center">
 
-S3Go is a secure, local, high-performance Amazon S3 web client built in Go and wrapped in a premium, glassmorphic single-page application (SPA). Designed with a **100% CGO-free architecture**, S3Go is cross-platform, light on resources, and extremely easy to compile and deploy on macOS, Windows, Linux, or cloud environments like Render.
+# 🪣 S3Go (`s3go`)
 
----
+**Lightweight, CGO-free Amazon S3 web client and file manager built with Go.**
 
-## ✨ Features
+[![Go Version](https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat-square&logo=go)](https://golang.org)
+[![AWS SDK](https://img.shields.io/badge/AWS%20SDK-v2-FF9900?style=flat-square&logo=amazon-aws)](https://aws.amazon.com/sdk-for-go/)
+[![Security](https://img.shields.io/badge/Encryption-AES--256--GCM-green?style=flat-square)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
+[![Architecture](https://img.shields.io/badge/CGO--Free-Pure%20Go-007acc?style=flat-square)](https://golang.org)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-- **🎨 Sleek Glassmorphic Interface:** A modern, visual-first dark mode dashboard utilizing subtle backdrop blur filters (`backdrop-filter`), harmonious HSL colors, premium typography (Outfit and Inter from Google Fonts), and fluid micro-animations.
-- **⚡ Massive Bucket Listing Optimization (Root Bypass):** 
-  - Effortlessly browse large S3 buckets containing millions of objects or deep directory structures.
-  - By bypassing the root folder listing and targeting a nested directory directly, S3Go loads the dashboard instantly (**0.0-second listing time**), avoiding AWS timeout issues (`context deadline exceeded`).
-  - Configurable dynamically via environment variables (`BYPASS_BUCKET` and `BYPASS_FOLDER`).
-- **📤 Multi-Threaded Direct Uploads with Progress Bars:**
-  - Files are streamed directly from the browser to Amazon S3 using **S3 Presigned PUT URLs** via `XMLHttpRequest`.
-  - Bypasses backend network bottlenecks completely while displaying real-time, highly accurate percentage progress bars.
-- **🔒 Secure Connection Manager & Editor:**
-  - Add, list, edit, or delete S3 connection profiles directly from the client.
-  - **AES-256-GCM Encryption:** Secret access keys are securely encrypted at rest in the database.
-  - **Edit Isolation:** AWS Secret Access Keys are never returned to the frontend. During edits, the secret field remains blank. Leaving it blank retains the existing secure key, making credential updates easy and safe.
-  - **Pre-flight Validation:** Automatically executes a pre-flight S3 verification check using the decrypted credentials before saving the connection.
-- **🗃️ Dual Storage Backend (JSON & PostgreSQL):**
-  - **CGO-Free Local JSON Fallback:** Uses a lightweight, thread-safe JSON file database (`connections.json`) wrapped in double-checked read/write mutexes (`sync.RWMutex`) for zero-configuration local development.
-- **⌨️ Keyboard Shortcuts & History Navigation:**
-  - **Escape Key Closing:** Close any active modal (Connection Manager, Folder Creation, File Preview, or Delete confirmation) instantly by pressing the `Esc` key.
-  - **Browser Back/Forward Support:** Uses the HTML5 History API to synchronize current connection and prefix folders as query parameters (`?connection=ID&prefix=PATH`). You can navigate folder levels natively using browser back/forward buttons, and page reloads (`F5`) automatically restore your exact browsing state.
+</div>
 
 ---
 
-## 📂 Project Architecture
+S3Go is a self-contained, high-performance Amazon S3 web manager with an embedded dark-mode web interface. Built in 100% pure Go without CGO dependencies, it provides direct browser-to-S3 presigned uploads, root-bypass listing optimizations for massive buckets, AES-256-GCM credential encryption at rest, and dual-backend persistence (local JSON or PostgreSQL).
+
+---
+
+## Architecture
 
 ```
-s3go/
+┌─────────────────────────────────────────────────────────────┐
+│             Embedded Frontend SPA (Browser)                 │
+│  - Glassmorphic UI / Dark mode                              │
+│  - Direct-to-S3 Presigned Uploads with Progress Tracking    │
+│  - HTML5 History Navigation (?connection=ID&prefix=PATH)   │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              │ 1. API Requests (JSON)
+                              v
+┌─────────────────────────────────────────────────────────────┐
+│                      S3Go Backend (Go)                      │
+│                                                             │
+│  +------------------------+     +------------------------+  │
+│  |  Connection Controller |     |  S3 Action Controller  |  │
+│  +------------------------+     +------------------------+  │
+│              │                              │               │
+│              v                              v               │
+│  +------------------------+     +------------------------+  │
+│  |  AES-256-GCM Crypto    |     |  AWS SDK v2 Client     |  │
+│  |  (Key Encryption)      |     |  (Presign / List / DL) |  │
+│  +------------------------+     +------------------------+  │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+               │ 2. Credentials               │ 3. Generate Presigned URL
+               v                              v
+┌─────────────────────────────┐ ┌─────────────────────────────┐
+│  Persistence Storage        │ │         Amazon S3           │
+│  - Local JSON Fallback      │ │  - Direct Browser Uploads   │
+│  - PostgreSQL / Supabase    │ │  - Bucket / Folder Listing  │
+└─────────────────────────────┘ └─────────────────────────────┘
+```
+
+---
+
+## Core Features
+
+- **Direct Browser-to-S3 Uploads**: Files stream directly from client to S3 using Presigned PUT URLs, eliminating server-side bandwidth bottlenecks and providing accurate percentage upload progress.
+- **Root-Bypass Bucket Listing Optimization**: Instantly open deeply nested folders in massive S3 buckets containing millions of objects without experiencing AWS listing timeouts (`BYPASS_BUCKET` & `BYPASS_FOLDER`).
+- **Encrypted Credential Storage**: AWS Secret Access Keys are encrypted at rest using AES-256-GCM. Decrypted secrets are never exposed back to the client interface.
+- **Dual Persistence Backends**:
+  - **Zero-Config JSON**: Thread-safe file storage (`connections.json`) for local development.
+  - **PostgreSQL / Supabase**: Database persistence for production or serverless environments.
+- **100% CGO-Free**: Pure Go code that compiles into a single, static binary with zero external runtime dependencies.
+- **Modern Embedded UI**: Self-contained single-page application served directly from the Go binary with keyboard shortcuts (`Esc` to dismiss modals) and URL state synchronization.
+
+---
+
+## Project Structure
+
+```
+.
 ├── cmd/
 │   └── serverd/
-│       ├── main.go           # Bootstrapper, database initializer, and HTTP server daemon
-│       ├── router/           # Routing configuration mapping HTTP paths to controllers
-│       └── static/           # Embedded Frontend SPA Assets (index.html, style.css, app.js)
+│       ├── main.go           # Application bootstrap and HTTP daemon
+│       ├── router/           # Route registration and static asset serving
+│       └── static/           # Embedded frontend SPA assets (HTML, CSS, JS)
 ├── internal/
-│   ├── app/
-│   │   └── configs.go        # Configuration loader, environment validation & .env parser
-│   ├── entity/
-│   │   └── connection.go     # Core database entity definition
-│   ├── model/
-│   │   ├── connection.go     # Connection API contracts and schemas
-│   │   ├── s3.go             # S3 file model structures & presigned payloads
-│   │   └── types.go          # General model types
-│   ├── persistence/
-│   │   ├── spec.go           # Unit of Work standard interfaces & implementation
-│   │   └── connection/       # Connection repository specs & local/PG integrations
-│   ├── infra/
-│   │   └── s3/               # AWS SDK client wrapper client & credentials validation
-│   ├── service/
-│   │   ├── connection/       # Connection manager business service
-│   │   └── s3/               # S3 file action business service
-│   ├── controller/
-│   │   └── rest/v1/          # REST API controller handlers and response DTO mapping
-│   └── pkg/
-│       └── crypto/           # AES-256-GCM symmetric encryption & hermetic unit tests
-├── .env.example              # Template configuration for environment settings
-├── Makefile                  # Build, test, run, and cleanup commands
-└── go.mod                    # CGO-free dependencies list
+│   ├── app/                  # Environment loader and configuration models
+│   ├── controller/rest/v1/   # REST API controllers and DTO mappings
+│   ├── entity/               # Core domain models
+│   ├── infra/s3/             # AWS SDK v2 client wrapper and verification
+│   ├── persistence/          # Repository layer (JSON file & PostgreSQL)
+│   ├── pkg/crypto/           # AES-256-GCM symmetric encryption utilities
+│   └── service/              # Connection management and S3 file operations
+├── .env.example              # Configuration template
+├── Makefile                  # Build, test, and run automation
+├── supabase_schema.sql       # PostgreSQL / Supabase schema definitions
+└── go.mod                    # Dependencies
 ```
 
-## 🚀 Getting Started
+---
 
-### 📋 Prerequisites
-- Go 1.22+ installed locally.
-- Git.
+## Getting Started
 
-### 🛠️ Development & Commands
+### Prerequisites
 
-S3Go includes a simple `Makefile` to automate all repetitive actions:
+- **Go**: `1.22` or higher
 
-- **Build S3Go binary:**
-  ```bash
-  make build
-  ```
-- **Start the S3Go server:**
-  ```bash
-  make run
-  ```
-  Once started, the application will boot and serve the client interface. Open your browser and navigate to:
-  [http://localhost:8080](http://localhost:8080)
+### 1. Configuration
 
-- **Run hermetic unit tests:**
-  ```bash
-  make test
-  ```
+Copy `.env.example` to `.env`:
 
-- **Clean build artifacts:**
-  ```bash
-  make clean
-  ```
+```bash
+cp .env.example .env
+```
 
-## 🛡️ License
+| Variable | Description | Default / Example |
+|---|---|---|
+| `PORT` | HTTP server port | `8080` |
+| `S3GO_ENCRYPTION_KEY` | 32-character AES-256 secret key | `your-32-character-encryption-key` |
+| `DB_PATH` | Path to JSON connections file | `connections.json` |
+| `DATABASE_URL` | PostgreSQL connection string (optional) | - |
+| `ALLOWED_IPS` | Comma-separated whitelist of allowed client IPs (optional) | - |
+| `BYPASS_BUCKET` | S3 bucket name to enable root bypass optimization (optional) | - |
+| `BYPASS_FOLDER` | Folder prefix to load directly on root bypass (optional) | - |
 
-This project is open-source. Feel free to use, modify, and distribute it in compliance with standard software guidelines.
+### 2. Build & Run
+
+```bash
+# Run locally
+make run
+
+# Or build binary
+make build
+./s3go
+```
+
+Open [http://localhost:8080](http://localhost:8080) in your browser to access the S3Go interface.
+
+---
+
+## Makefile Reference
+
+| Command | Description |
+|---|---|
+| `make run` | Build and run S3Go locally |
+| `make build` | Compile the static S3Go binary |
+| `make test` | Run hermetic unit tests |
+| `make clean` | Clean up build artifacts and caches |
+
+---
+
+## Security Model
+
+- **Key Derivation & Cipher**: AES-256-GCM authenticated encryption ensures confidentiality and integrity of stored AWS credentials.
+- **Pre-flight Validation**: Verifies S3 connection permissions before saving credentials.
+- **Write-Only Secrets**: Edit actions in the UI do not disclose existing secret keys over the wire.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
