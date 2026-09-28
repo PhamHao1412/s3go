@@ -132,6 +132,53 @@ func isGarbage(name string) bool {
 	return false
 }
 
+// getBypassFolders parses BYPASS_FOLDER and checks if bucket matches BYPASS_BUCKET.
+// Supports comma-separated bucket names and comma-separated folder names.
+func getBypassFolders(bucket string) ([]model.S3Item, []string, bool) {
+	bypassBucketConfig := os.Getenv("BYPASS_BUCKET")
+	bypassFolderConfig := os.Getenv("BYPASS_FOLDER")
+
+	if bypassBucketConfig == "" || bypassFolderConfig == "" || bucket == "" {
+		return nil, nil, false
+	}
+
+	// Check if the current bucket matches any configured bypass bucket (comma-separated or single)
+	isMatch := false
+	for _, b := range strings.Split(bypassBucketConfig, ",") {
+		if strings.TrimSpace(b) == bucket {
+			isMatch = true
+			break
+		}
+	}
+	if !isMatch {
+		return nil, nil, false
+	}
+
+	var items []model.S3Item
+	var prefixes []string
+
+	for _, folder := range strings.Split(bypassFolderConfig, ",") {
+		folder = strings.TrimSpace(folder)
+		if folder == "" {
+			continue
+		}
+		// Clean leading and trailing slashes for name
+		cleanName := strings.Trim(folder, "/")
+		if cleanName == "" {
+			continue
+		}
+		key := cleanName + "/"
+		items = append(items, model.S3Item{
+			Key:   key,
+			Name:  cleanName,
+			IsDir: true,
+		})
+		prefixes = append(prefixes, key)
+	}
+
+	return items, prefixes, len(items) > 0
+}
+
 // ListObjects retrieves objects inside a bucket under a prefix, supporting searching and structured directories.
 func (c *client) ListObjects(ctx context.Context, accessKey, secretKey, region, bucket, prefix, search string) ([]model.S3Item, error) {
 	s3Client, err := c.newS3Client(ctx, accessKey, secretKey, region)
@@ -139,24 +186,10 @@ func (c *client) ListObjects(ctx context.Context, accessKey, secretKey, region, 
 		return nil, err
 	}
 
-	bypassBucket := os.Getenv("BYPASS_BUCKET")
-	bypassFolder := os.Getenv("BYPASS_FOLDER")
+	bypassItems, bypassPrefixes, isBypass := getBypassFolders(bucket)
 
-	if bypassBucket != "" && bypassFolder != "" {
-		bypassFolderSlash := bypassFolder
-		if !strings.HasSuffix(bypassFolderSlash, "/") {
-			bypassFolderSlash += "/"
-		}
-
-		if bucket == bypassBucket && prefix == "" && search == "" {
-			return []model.S3Item{
-				{
-					Key:   bypassFolderSlash,
-					Name:  strings.TrimSuffix(bypassFolder, "/"),
-					IsDir: true,
-				},
-			}, nil
-		}
+	if isBypass && prefix == "" && search == "" {
+		return bypassItems, nil
 	}
 
 	// Increase timeout to 180 seconds (3 minutes) as requested
@@ -167,60 +200,64 @@ func (c *client) ListObjects(ctx context.Context, accessKey, secretKey, region, 
 	maxItems := 2000 // Return at most 2000 valid items to prevent browser lag & infinite backend loops
 
 	if search != "" {
-		searchPrefix := prefix
-		if bypassBucket != "" && bypassFolder != "" && bucket == bypassBucket && prefix == "" {
-			bypassFolderSlash := bypassFolder
-			if !strings.HasSuffix(bypassFolderSlash, "/") {
-				bypassFolderSlash += "/"
-			}
-			searchPrefix = bypassFolderSlash // Focus search inside bypass folder to avoid massive timeout
+		var prefixesToSearch []string
+		if isBypass && prefix == "" {
+			prefixesToSearch = bypassPrefixes // Focus search inside bypass folders to avoid massive timeout
+		} else {
+			prefixesToSearch = []string{prefix}
 		}
-
-		paginator := awsS3.NewListObjectsV2Paginator(s3Client, &awsS3.ListObjectsV2Input{
-			Bucket: aws.String(bucket),
-			Prefix: aws.String(searchPrefix),
-		})
 
 		searchLower := strings.ToLower(search)
 		scannedCount := 0
 		maxScan := 15000 // Scan up to 15,000 S3 objects
 
-		for paginator.HasMorePages() {
-			page, err := paginator.NextPage(listCtx)
-			if err != nil {
-				return nil, err
-			}
+		for _, searchPrefix := range prefixesToSearch {
+			paginator := awsS3.NewListObjectsV2Paginator(s3Client, &awsS3.ListObjectsV2Input{
+				Bucket: aws.String(bucket),
+				Prefix: aws.String(searchPrefix),
+			})
 
-			scannedCount += len(page.Contents)
+			for paginator.HasMorePages() {
+				page, err := paginator.NextPage(listCtx)
+				if err != nil {
+					return nil, err
+				}
 
-			for _, obj := range page.Contents {
-				key := aws.ToString(obj.Key)
+				scannedCount += len(page.Contents)
 
-				parts := strings.Split(key, "/")
-				var name string
-				if len(parts) > 0 {
-					name = parts[len(parts)-1]
-					if name == "" && len(parts) > 1 {
-						name = parts[len(parts)-2]
+				for _, obj := range page.Contents {
+					key := aws.ToString(obj.Key)
+
+					parts := strings.Split(key, "/")
+					var name string
+					if len(parts) > 0 {
+						name = parts[len(parts)-1]
+						if name == "" && len(parts) > 1 {
+							name = parts[len(parts)-2]
+						}
+					}
+
+					if isGarbage(name) {
+						continue
+					}
+
+					if strings.Contains(strings.ToLower(key), searchLower) {
+						items = append(items, model.S3Item{
+							Key:          key,
+							Name:         name,
+							Size:         aws.ToInt64(obj.Size),
+							LastModified: aws.ToTime(obj.LastModified),
+							IsDir:        strings.HasSuffix(key, "/"),
+						})
+
+						if len(items) >= maxItems {
+							break
+						}
 					}
 				}
 
-				if isGarbage(name) {
-					continue
-				}
-
-				if strings.Contains(strings.ToLower(key), searchLower) {
-					items = append(items, model.S3Item{
-						Key:          key,
-						Name:         name,
-						Size:         aws.ToInt64(obj.Size),
-						LastModified: aws.ToTime(obj.LastModified),
-						IsDir:        strings.HasSuffix(key, "/"),
-					})
-
-					if len(items) >= maxItems {
-						break
-					}
+				if scannedCount >= maxScan || len(items) >= maxItems {
+					break
 				}
 			}
 
